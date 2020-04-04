@@ -1,0 +1,293 @@
+---
+title: "Visualization of NYT COVID-19 Data"
+output: 
+  html_document:
+    includes:
+       in_header: ga_script.html
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### These visualizations update daily. [Link to data here](https://github.com/nytimes/covid-19-data).
+#### Last updated `r format(Sys.time(), "%B %d, %Y")` at `r format(Sys.time(), "%H:%M %Z")`. 
+
+
+A compliment to the [map created by the New York Times](https://www.nytimes.com/interactive/2020/us/coronavirus-us-cases.html) showing the spread of COVID-19 cases by U.S. County created by [Stan Oklobdzija](stanokl.github.io). Unlike the Times' map, this map is normalized by county population size to show the penetration of COVID-19 cases. Counties are shaded based on the number of COVID-19 cases per 1,000 residents. Information on the raw number cases and deaths, the rates per 1,000 residents and the [doubling time](https://en.wikipedia.org/wiki/Doubling_time) are also available by clicking on the county. 
+
+
+A note on the data: The New York Times aggregated all five boroughs of New York City into one geographic entity. To map it, I condensed data on that city to the borough of Manhattan, (New York County.) Similarly, the Times created a separate geographic entity for Kansas City, Missouri. I reaggregated those cases to Jackson County, Missouri which houses that city. 
+
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE, comment=NA, out.width='100%'}
+library(tidyverse)
+library(tidycensus)
+library(htmltools)
+
+##NYT data
+nyt_data <- read.csv("https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv") %>% 
+  mutate(fips=str_pad(fips, width=5,side="left",pad="0")) %>%
+  mutate(fips=ifelse(county=="New York City", "NYC",fips)) %>%
+  mutate(fips = ifelse(county=="Kansas City", "29101",fips)) %>% group_by(fips, date) %>%
+  mutate(cases=sum(cases), deaths=sum(deaths)) %>% distinct(date,fips, .keep_all = T)
+
+  
+##load census data
+##I initially loaded several county level variables, but in the end I just used population
+
+# key <- "KEY GOES HERE"
+# 
+# census_api_key(key, install=T)
+# #
+# # variables <- load_variables(year = 2018, dataset= "acs5", cache = TRUE)
+# # # #
+# pop_county <- get_acs(geography = "county",
+#                       variables = "B01003_001") %>% mutate("population"=estimate) %>%
+#   select(-c(variable,estimate))
+# 
+# med_inc <- get_acs(geography = "county",
+#                    variables = "B19013_001") %>% mutate("med_income"=estimate) %>%
+#   select(-c(variable,estimate,moe))
+# 
+# med_age <- get_acs(geography = "county",
+#                    variables = "B01002_001") %>% mutate("med_age"=estimate)%>%
+#   select(-c(variable,estimate,moe))
+# 
+# whites <- get_acs(geography = "county",
+#                   variables = c("B03002_003","B02001_001")) %>%
+#   group_by(GEOID, NAME) %>% summarise(white_pct=estimate[variable=="B03002_003"]/estimate[variable=="B02001_001"])
+# 
+# county_demos <- merge(pop_county, med_inc, by=c("GEOID","NAME")) %>%
+#   merge(med_age, by=c("GEOID","NAME")) %>% merge(whites, by=c("GEOID","NAME"))
+# #
+# # ##make an NYC line for NYT data
+# #
+# nyc <- county_demos %>% filter(NAME %in% c("New York County, New York",
+#                                            "Kings County, New York",
+#                                            "Queens County, New York",
+#                                            "Bronx County, New York",
+#                                            "Richmond County, New York")) %>%
+#   summarise(population=sum(population), med_income=mean(med_income),med_age=mean(med_age), white_pct=mean(white_pct)) %>%
+#   mutate(GEOID="NYC") %>% slice(rep(1,each=5))
+# #
+# # # nyc$GEOID <- county_demos$GEOID[county_demos$NAME %in% c("New York County, New York",
+# # #                                                          "Kings County, New York",
+# # #                                                          "Queens County, New York",
+# # #                                                          "Bronx County, New York",
+# # #                                                          "Richmond County, New York")]
+# #
+#  nyc$GEOID <- "NYC"
+# #
+# # # #
+# # # #
+# kc_whites <-  get_acs(geography = "place", variables = c("B03002_003","B02001_001")) %>%
+#   filter(NAME=="Kansas City city, Missouri") %>%
+#   group_by(GEOID, NAME) %>% summarise(white_pct=estimate[variable=="B03002_003"]/estimate[variable=="B02001_001"])
+# 
+# kc_whites$GEOID <- "kcmo"
+# 
+# kc_mo <-get_acs(geography = "place", variables = c("B01003_001","B01002_001","B19013_001")) %>%
+#   filter(NAME=="Kansas City city, Missouri") %>% spread(variable, estimate) %>%
+#   mutate(GEOID="kcmo") %>%
+#   rename(med_age = "B01002_001", population = "B01003_001", med_income = "B19013_001") %>%
+#   select(-moe) %>%group_by(GEOID) %>% summarise_all(funs( na.omit(unique(.)) ))
+# 
+# kc_mo <- merge(kc_whites, kc_mo, by=c("GEOID","NAME"))
+# 
+# kc_mo$GEOID <- "29101"
+# # #
+#  county_demos <- bind_rows(county_demos, nyc, kc_mo)
+# # #
+#  save(county_demos, file="YOUR PATH HERE")
+
+load("PATH TO YOUR COUNTY DEMO DATA")
+
+##merge county_demo and nyt_data
+##I calculated several statistics, but in the end just ended up using growth rates in the visualizations. 
+library(lubridate)
+
+nyt_demo <- merge(nyt_data, county_demos, by.x="fips",by.y="GEOID") %>% select(-moe) %>%
+  group_by(fips) %>% mutate(case_per_1k = (cases/population) * 1000, death_per_1k=(deaths/population) *1000) %>%
+  mutate(growth_rate_5day = ((cases-lag(cases, n=5, order_by = date))/lag(cases, n=5, order_by = date))*100,
+    case_p1k_grow1 = case_per_1k-lag(case_per_1k, n=1, order_by = date),
+         case_p1k_grow3 = case_per_1k-lag(case_per_1k, n=3, order_by = date),
+         case_p1k_grow5 = case_per_1k-lag(case_per_1k, n=5, order_by = date),
+         death_p1k_grow1 = death_per_1k-lag(death_per_1k, n=1, order_by = date),
+         death_p1k_grow3 = death_per_1k-lag(death_per_1k, n=3, order_by = date),
+         death_p1k_grow5 = death_per_1k-lag(death_per_1k, n=5, order_by = date),
+    growth_rate = (log(cases)-lag(log(cases), n=1, order_by=date)),
+    double_time = log(2)/growth_rate) %>%
+  mutate(month=month(date), date=ymd(date)) %>%
+  rename(GEOID=fips) 
+
+##recode NYC data to manhattan
+  
+nyt_demo$GEOID <- ifelse(nyt_demo$GEOID=="NYC", 36061, nyt_demo$GEOID)
+
+nyt_demo$NAME <- ifelse(nyt_demo$GEOID=="36061", "NYC (all boroughs)",nyt_demo$NAME)
+
+
+### create interactive map
+library(tigris)
+library(leaflet)
+
+map_shape <- counties(cb=T, year=2018)
+
+map_data <- nyt_demo %>% group_by(GEOID) %>% filter(date==max(date)) %>%
+  mutate(cases_per_1k = (cases/population) * 1000,
+         deaths_per_1k = (deaths/population) * 1000) %>%
+  distinct(GEOID, .keep_all=T) %>% mutate(double_time = ifelse(double_time==Inf, NA,double_time))
+
+leafmap <- geo_join(map_shape, map_data, by="GEOID")
+
+##create function to compute percentile rank
+
+perc.rank <- function(val, data)  length(data[data <= val])/length(data)*100
+
+popup_dat <- paste0("<strong>County: </strong>", 
+                    leafmap$NAME.1, 
+                    "<br><strong>Cumulative Cases: </strong>", 
+                    prettyNum(leafmap$cases,big.mark = ","),
+                    "<br><strong>Cumulative Deaths: </strong>", 
+                    prettyNum(leafmap$deaths, big.mark=","),
+                    "<br><strong>Cumulative Cases per 1k: </strong>", 
+                    round(leafmap$cases_per_1k, digits=3),
+                    "<br><strong>Cumulative Deaths per 1k: </strong>", 
+                    round(leafmap$deaths_per_1k, digits=3),
+                    "<br><strong>Daily Case Growth Rate: </strong>", 
+                    round(leafmap$growth_rate * 100, digits=2))
+
+##define break points
+breaks <- c(0, .1,.3,.5,.7,1,2,4,8,max(map_data$cases_per_1k))
+
+pal <- colorBin("Reds",domain=leafmap$cases_per_1k, na.color="grey",bin=breaks)
+
+# Render final map in leaflet.
+#library(htmlwidgets)
+
+covid_map <-leaflet(data = leafmap, width = "100%") %>% addTiles() %>%
+  setView(lat=39.8283,lng= -98.5795, zoom=4) %>%
+  addPolygons(fillColor = ~pal(cases_per_1k), 
+              fillOpacity = 0.8, 
+              color = "#BDBDC3", 
+              weight = 1,
+              popup = popup_dat) %>%
+    addLegend(pal = pal, 
+            values = ~cases_per_1k, 
+            position = "bottomright", 
+            title = "Cases Per 1,000 Residents:")
+
+covid_map
+
+```
+
+
+
+#### Top 30 Counties by Daily Growth Rate, (for counties with more than 100 cases)
+
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE, comment=NA, out.width='100%'}
+library(plotly)
+library(ggrepel)
+
+fast_counties <- nyt_demo %>% ungroup() %>% filter(date==max(date) & cases > 100) %>% distinct(GEOID, .keep_all=T) %>% top_n(30, growth_rate) %>% arrange(-growth_rate)
+
+
+f <- list(
+  size = 18,
+  color = "#7f7f7f"
+)
+x <- list(
+  title = "Cases",
+  titlefont = f
+)
+y <- list(
+  title = "Growth Rate",
+  titlefont = f
+)
+
+
+plot_ly(fast_counties, x=~cases, y=~growth_rate, size=~population, color=~state, type="scatter", mode="markers",
+  hoverinfo="text", 
+         text = ~paste('</br> Name: ', NAME,
+                       '</br> Cases: ', prettyNum(cases, big.mark = ","),
+                       '</br> Population: ', prettyNum(population, big.mark = ","),
+                       '</br> Daily Growth Rate: ', round(growth_rate * 100, digits=2)
+                       )) %>% layout(showlegend = FALSE, yaxis = list(range=c(0, max(fast_counties$growth_rate)+.2))) %>% layout(xaxis = x, yaxis=y) %>% config(displayModeBar = FALSE)
+
+```
+
+
+#### Doubling Time in Largest U.S. Metro Areas.
+(Doubling time calculated based on average growth rate of previous week.)
+
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE, comment=NA, out.width='100%', out.height='100%'}
+library(tigris)
+library(plotly)
+library(ggrepel)
+library(readxl)
+library(lubridate)
+library(tidyverse)
+
+##reload Times Data
+##mutate NYC to manhattan and KC to Johnson County
+
+nyt_data <- read.csv("https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv") %>% 
+  mutate(fips=str_pad(fips, width=5,side="left",pad="0")) %>%
+  mutate(fips=ifelse(county=="New York City", "36061",fips)) %>%
+  mutate(fips = ifelse(county=="Kansas City", "29101",fips)) %>%
+  mutate(date = ymd(date))
+  
+
+##Metro County List
+
+##counties that encompass each Census CSA area found here: 
+##https://www2.census.gov/programs-surveys/metro-micro/geographies/reference-files/2018/delineation-files/list1_Sep_2018.xls
+
+metros <- read_xls("list1_Sep_2018.xls", skip = 2)
+
+##names of 30 most populous metro areas in US
+##https://www.thoughtco.com/largest-metropolitan-areas-1435135
+##Note: amend some of the names that don't match the census CSA names
+
+top_metros <- read.csv("top_metros.csv", stringsAsFactors = F)
+
+metros <- metros[metros$`CSA Title` %in% top_metros$name,] 
+
+metros <- metros %>% mutate(fips=paste0(metros$`FIPS State Code`,metros$`FIPS County Code`)) %>%
+  merge(nyt_data, by="fips")
+
+metro_sum <- metros %>% group_by(date, `CSA Title`) %>% summarise(cases=sum(cases)) %>% group_by(`CSA Title`) %>%
+  mutate(growth_rate = log(cases)-lag(log(cases), n=1, order_by=date)) %>%
+  group_by(week(date), `CSA Title`) %>% mutate(wk_growth_rate = mean(growth_rate, na.rm=T), 
+         double_time = log(2)/wk_growth_rate) %>%
+  mutate(double_time = ifelse(double_time==Inf,NA,double_time))
+
+
+f <- list(
+  size = 18,
+  color = "#7f7f7f"
+)
+x <- list(
+  title = "Metro Area",
+  titlefont = f
+)
+y <- list(
+  title = "Doubling Time (Days)",
+  titlefont = f
+)
+
+for_plot <- metro_sum[metro_sum$date==max(metro_sum$date),]
+
+for_plot$`CSA Title` <- factor(for_plot$`CSA Title`, levels = unique(for_plot$`CSA Title`)[order(for_plot$double_time, decreasing = TRUE)])
+
+plot_ly(for_plot, y=~double_time, x=~as.factor(`CSA Title`),color=~`CSA Title`, type="bar",
+  hoverinfo="text", 
+         text = ~paste('</br> Name: ', `CSA Title`,
+                       '</br> Cases: ', prettyNum(cases, big.mark = ","),
+                       '</br> Doubling Time: ', paste0(prettyNum(double_time, digits=3), " days")
+                       )) %>% layout(showlegend = FALSE) %>% layout(xaxis = x, yaxis=y, autosize=F, height=800, width=1200) %>% config(displayModeBar = FALSE)
+
+```
